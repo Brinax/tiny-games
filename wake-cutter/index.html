@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Wake Cutter</title>
+<style>
+html,body{margin:0;height:100%;background:#0b0820;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#fff}
+canvas{display:block;width:100vw;height:100vh;height:100dvh}
+#mute{position:fixed;top:10px;right:10px;z-index:5;background:rgba(255,255,255,.12);border:0;color:#fff;font-size:20px;width:44px;height:44px;border-radius:22px}
+#fun{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(5,3,20,.7);z-index:6}
+#fun .box{background:#1d1640;padding:22px 26px;border-radius:16px;text-align:center;max-width:300px}
+#fun button{font-size:18px;margin:8px;padding:10px 22px;border:0;border-radius:10px;color:#0b0820;font-weight:700}
+#fun .x{background:none;color:#aaa;font-size:14px;font-weight:400}
+</style>
+<script data-goatcounter="https://GAMESCODE.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="mute" aria-label="Toggle sound">🔊</button>
+<div id="fun"><div class="box"><div style="font-size:20px;margin-bottom:10px">Was this fun?</div>
+<button id="funYes" style="background:#7fffd4">Yes</button><button id="funNo" style="background:#ff8fa3">No</button><br>
+<button class="x" id="funX">not now</button></div></div>
+<script src="game.js"></script>
+</body>
+</html>
