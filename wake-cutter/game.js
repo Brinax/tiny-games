@@ -55,23 +55,29 @@ let best = +(localStorage.getItem('wc_best') || 0);
 let state = 'ready'; // ready, play, dying, over
 let P = { x: 0, y: 0, r: 7 };
 let wake = [], bullets = [], parts = [], texts = [];
-let t = 0, cuts = 0, score = 0, spawnT = 0, shake = 0, slow = 1, deathT = 0, overAt = 0, tier = 0, chainCut = 0, chainT = 0;
+let runId = 0, t = 0, cuts = 0, score = 0, spawnT = 0, shake = 0, slow = 1, deathT = 0, overAt = 0, tier = 0, chainCut = 0, chainT = 0;
 let runs = +(sessionStorage.getItem('wc_runs') || 0), funShown = sessionStorage.getItem('wc_fun') === '1';
-window.__game = { get state() { return state; }, get time() { return t; }, get cuts() { return cuts; }, get player() { return { x: P.x, y: P.y }; } };
+window.__game = { get state() { return state; }, get time() { return t; }, get cuts() { return cuts; }, get player() { return { x: P.x, y: P.y }; }, get bullets() { return bullets.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, r: b.r })); }, get pr() { return P.r; } };
 const TIERS = [0, 10, 20, 30, 45, 60];
-const HUES = [190, 300, 40, 0, 140, 260];
+const HUES = [190, 90, 40, 170, 140, 260]; // kept away from bullet pink (~345)
 
 function reset() {
   P.x = W / 2; P.y = H * 0.7; P.r = 7 * U;
   wake = []; bullets = []; texts = []; t = 0; cuts = 0; score = 0; spawnT = 1.4; slow = 1; tier = 0; chainCut = 0;
-  state = 'play';
+  runId++; state = 'play';
 }
 function hue() { return HUES[tier % HUES.length]; }
 
 // ---- bullet patterns ----
-function spd() { return (90 + t * 5) * U; }
+function spd() { return (90 + t * 5 + Math.max(0, t - 35) * 1.5) * U; }
+function later(fn, ms) { const id = runId; setTimeout(() => { if (state === 'play' && runId === id) fn(); }, ms); }
+const far = (x, y) => Math.hypot(x - P.x, y - P.y) > 150 * U;
 function shoot(x, y, a, s, r) { bullets.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, r: (r || 6) * U, born: t }); }
 function edgePoint() {
+  for (let k = 0; k < 8; k++) { const p = edgePoint1(); if (far(p.x, p.y)) return p; }
+  return edgePoint1();
+}
+function edgePoint1() {
   const e = Math.floor(rnd(0, 4));
   if (e === 0) return { x: rnd(0, W), y: -10 };
   if (e === 1) return { x: W + 10, y: rnd(0, H) };
@@ -79,16 +85,20 @@ function edgePoint() {
   return { x: -10, y: rnd(0, H) };
 }
 const patterns = [
-  () => { const p = edgePoint(), a = Math.atan2(P.y - p.y, P.x - p.x); for (let i = 0; i < 5; i++) setTimeout(() => state === 'play' && shoot(p.x, p.y, a, spd()), i * 90); },
+  () => { const p = edgePoint(), a = Math.atan2(P.y - p.y, P.x - p.x); for (let i = 0; i < 5; i++) later(() => shoot(p.x, p.y, a, spd()), i * 90); },
   () => { const p = edgePoint(), a = Math.atan2(P.y - p.y, P.x - p.x); for (let i = -2; i <= 2; i++) shoot(p.x, p.y, a + i * 0.22, spd() * 0.9); },
-  () => { const x = rnd(W * .2, W * .8), y = rnd(H * .15, H * .4), n = 12 + Math.floor(t / 8); for (let i = 0; i < n; i++) shoot(x, y, i / n * TAU, spd() * 0.7); burst(x, y, 0, 16); },
+  () => { let x, y, k = 0; do { x = rnd(W * .2, W * .8); y = rnd(H * .15, H * .4); } while (!far(x, y) && ++k < 8); const n = 12 + Math.floor(t / 8); for (let i = 0; i < n; i++) shoot(x, y, i / n * TAU, spd() * 0.7); burst(x, y, 0, 16); },
   () => { const gap = rnd(0.15, 0.85) * W, n = Math.ceil(W / (26 * U)); for (let i = 0; i < n; i++) { const x = i * 26 * U + 10; if (Math.abs(x - gap) > 50 * U) shoot(x, -10, Math.PI / 2, spd() * 0.75); } },
-  () => { const cx = W / 2, cy = H / 2, a0 = rnd(0, TAU); for (let i = 0; i < 16; i++) setTimeout(() => state === 'play' && shoot(cx, cy, a0 + i * 0.5, spd() * 0.8), i * 60); },
+  () => { const cx = W / 2, cy = far(W / 2, H / 2) ? H / 2 : (P.y > H / 2 ? H * 0.25 : H * 0.75), a0 = rnd(0, TAU); for (let i = 0; i < 16; i++) later(() => shoot(cx, cy, a0 + i * 0.5, spd() * 0.8), i * 60); },
 ];
 function spawn() {
   const unlocked = Math.min(patterns.length, 1 + Math.floor(t / 5));
   patterns[Math.floor(rnd(0, unlocked))]();
-  spawnT = Math.max(0.45, 1.5 - t * 0.03);
+  // past 35s keep ramping gently: the spawn floor keeps sliding down and a second pattern
+  // sometimes stacks on top, so runs end within a couple of minutes even for strong players
+  const late = Math.max(0, t - 35);
+  if (late > 0 && Math.random() < Math.min(0.45, late * 0.012)) later(() => patterns[Math.floor(rnd(0, patterns.length))](), 250);
+  spawnT = Math.max(Math.max(0.26, 0.45 - late * 0.004), 1.5 - t * 0.03);
 }
 
 // ---- juice ----
