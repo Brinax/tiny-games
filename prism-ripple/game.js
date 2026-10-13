@@ -60,17 +60,25 @@ let dots = [], rings = [], parts = [], beams = [], texts = [];
 let state = 'ready'; // ready, live, chain, over
 let popped = 0, combo = 0, score = 0, target = 0, total = 0, shake = 0, flash = 0;
 let runs = +(sessionStorage.getItem('pr_runs') || 0), funShown = sessionStorage.getItem('pr_fun') === '1';
-let overAt = 0, won = false, overText = '';
+let quiet = 0, overAt = 0, won = false, overText = '';
 window.__firstDot = () => { const d = dots.find(d => d.alive && !d.prism); return { x: d.x, y: d.y }; };
 window.__game = { get state() { return state; }, get popped() { return popped; }, get level() { return level; } };
 
+// Levels 1-7 are a gentle ramp. From level 8 on, rings shrink and prisms get rarer, so a random
+// tap fizzles but a tap on a dense cluster or a prism still clears the goal.
+let TUNE = { k0: 0.06, kMin: 0.88, pDrop: 1, fr: 0.03, frMax: 0.58, pMin: 2 };
+window.__tune = o => Object.assign(TUNE, o);
 function levelCfg(n) {
   const count = Math.min(40 + n * 5, 100);
-  return { count, target: Math.min(Math.round(count * (0.22 + n * 0.04)), count - 2), prisms: Math.min(1 + Math.floor(n / 2), 6) };
+  const late = Math.max(0, n - 7);
+  const frac = Math.min(0.22 + Math.min(n, 7) * 0.04 + late * TUNE.fr, TUNE.frMax);
+  const prisms = n <= 7 ? Math.min(1 + Math.floor(n / 2), 4) : Math.max(TUNE.pMin, Math.round(4 - late * TUNE.pDrop));
+  const ringK = n <= 7 ? 1 : Math.max(TUNE.kMin, 1 - late * TUNE.k0);
+  return { count, target: Math.min(Math.round(count * frac), count - 2), prisms, ringK };
 }
 function setup() {
   const cfg = levelCfg(level);
-  total = cfg.count; target = cfg.target;
+  total = cfg.count; target = cfg.target; LK = cfg.ringK;
   dots = []; rings = []; beams = []; texts = []; popped = 0; combo = 0; score = 0;
   const r = Math.max(7, Math.sqrt(W * H) * 0.013);
   for (let i = 0; i < cfg.count; i++) {
@@ -80,11 +88,11 @@ function setup() {
   state = 'live';
 }
 // ring radius scales with mean dot spacing so chains behave the same on phone and desktop
-let RK = 0.8;
+let RK = 0.8, LK = 1;
 window.__setRK = k => { RK = k; };
-function ringR() { return RK * Math.sqrt(W * H / Math.max(total, 1)); }
+function ringR() { return RK * LK * Math.sqrt(W * H / Math.max(total, 1)); }
 function pop(d, gen) {
-  d.alive = false; popped++; combo++;
+  d.alive = false; popped++; combo++; quiet = 0;
   const pts = 10 * combo; score += pts;
   rings.push({ x: d.x, y: d.y, r: d.r, max: ringR(), t: 0, hue: d.hue, gen });
   const n = parts.length < 600 ? 14 : 6;
@@ -113,9 +121,10 @@ function onTap(e) {
   if (state === 'ready') { setup(); track('start'); runs++; sessionStorage.setItem('pr_runs', runs); return; }
   if (state === 'live') {
     rings.push({ x, y, r: 4, max: ringR() * 1.8, t: 0, hue: 0, gen: 0, player: true });
-    state = 'chain'; blip(160, 0.25, 'sine', 0.15); return;
+    state = 'chain'; quiet = 0; blip(160, 0.25, 'sine', 0.15); return;
   }
-  if (state === 'over' && performance.now() - overAt > 350) restart();
+  if (state === 'chain' && popped >= target) { gameOver(); return; }
+  if (state === 'over' && performance.now() - overAt > 250) restart();
 }
 function restart() {
   track('retry'); runs++; sessionStorage.setItem('pr_runs', runs);
@@ -133,7 +142,8 @@ document.getElementById('funNo').onclick = () => { track('fun-no'); closeFun(); 
 document.getElementById('funX').onclick = closeFun;
 
 function gameOver() {
-  state = 'over'; overAt = performance.now();
+  if (state === 'over') return;
+  state = 'over'; rings = rings.filter(r => !r.player); overAt = performance.now();
   won = popped >= target;
   if (SIM) return;
   if (score > best) { best = score; localStorage.setItem('pr_best', best); }
@@ -181,7 +191,11 @@ function update(dt) {
   for (const t of texts) t.t += dt;
   texts = texts.filter(t => t.t < 0.9);
   shake *= Math.pow(0.02, dt); flash = Math.max(0, flash - dt);
-  if (state === 'chain' && rings.length === 0 && beams.length === 0) gameOver();
+  if (state === 'chain') {
+    quiet += dt;
+    // end as soon as nothing has popped for 0.45s (rings left only fade), instead of waiting them out
+    if ((rings.length === 0 && beams.length === 0) || (beams.length === 0 && quiet > 0.45 && !rings.some(r => r.player && r.t < 0.6))) gameOver();
+  }
 }
 function draw() {
   ctx.save();
@@ -263,6 +277,27 @@ function draw() {
     ctx.fillStyle = '#c9b8ff'; ctx.fillText(won ? 'Tap for level ' + (level + 1) : 'Tap to retry', W / 2, H * 0.33 + 165);
   }
 }
+// test hook: best-of-N. Same layout, `tries` candidate taps (random dots/prisms), returns best fraction per layout
+window.__simBest = (n, lv, tries) => {
+  SIM = true; const keep = level, out = [];
+  level = lv || 1;
+  for (let i = 0; i < n; i++) {
+    setup(); for (let k = 0; k < 60; k++) update(1 / 60);
+    const snap = dots.map(d => ({ ...d })); let bestF = 0;
+    for (let t = 0; t < tries; t++) {
+      dots = snap.map(d => ({ ...d })); rings = []; beams = []; popped = 0; combo = 0; state = 'live';
+      const c = t % 3 === 0 && dots.some(d => d.prism) ? dots.filter(d => d.prism)[t % cfgPr()] : dots[Math.floor(Math.random() * dots.length)];
+      rings.push({ x: c.x, y: c.y, r: 4, max: ringR() * 1.8, t: 0, hue: 0, gen: 0, player: true });
+      state = 'chain'; quiet = 0; let guard = 0;
+      while (state === 'chain' && guard++ < 20000) update(1 / 60);
+      bestF = Math.max(bestF, popped / total);
+    }
+    out.push({ f: bestF, goal: target / total });
+  }
+  level = keep; SIM = false; state = 'ready'; dots = []; rings = []; beams = []; parts = []; texts = []; combo = 0;
+  return out;
+};
+function cfgPr() { return Math.max(1, dots.filter(d => d.prism).length); }
 // test hook: simulate n runs at a given level with random taps, returns popped fractions
 window.__sim = (n, lv) => {
   SIM = true; const keep = level, out = [];
@@ -274,6 +309,7 @@ window.__sim = (n, lv) => {
     while (state === 'chain' && guard++ < 20000) update(1 / 60);
     out.push(popped / total);
   }
+  window.__lastGoal = target / total;
   level = keep; SIM = false; state = 'ready'; dots = []; rings = []; beams = []; parts = []; texts = []; combo = 0;
   return out;
 };
