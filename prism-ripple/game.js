@@ -99,9 +99,12 @@ let state = 'ready'; // ready, live, chain, over
 let popped = 0, combo = 0, score = 0, target = 0, total = 0, shake = 0, flash = 0;
 let runs = +(sessionStorage.getItem('pr_runs') || 0), funShown = sessionStorage.getItem('pr_fun') === '1';
 let quiet = 0, overAt = 0, won = false, overText = '';
+// ---- daily challenge: same seeded layout for everyone on a UTC date, fixed level ----
+const DLV = 6;
+let daily = false, dinfo = TG.daily('pr'), maxCombo = 0, newBest = false;
 window.__firstDot = () => { const d = dots.find(d => d.alive && !d.prism); return { x: d.x, y: d.y }; };
 window.__prism = () => { const d = dots.find(d => d.alive && d.prism); return d ? { x: d.x, y: d.y } : null; };
-window.__game = { get state() { return state; }, get popped() { return popped; }, get level() { return level; } };
+window.__game = { get daily() { return daily; }, get score() { return score; }, get dinfo() { return dinfo; }, get state() { return state; }, get popped() { return popped; }, get level() { return level; } };
 
 // Levels 1-7 are a gentle ramp. From level 8 on, rings shrink and prisms get rarer, so a random
 // tap fizzles but a tap on a dense cluster or a prism still clears the goal.
@@ -115,24 +118,34 @@ function levelCfg(n) {
   const ringK = n <= 7 ? 1 : Math.max(TUNE.kMin, 1 - late * TUNE.k0);
   return { count, target: Math.min(Math.round(count * frac), count - 2), prisms, ringK };
 }
-function setup() {
-  const cfg = levelCfg(level);
-  total = cfg.count; target = cfg.target; LK = cfg.ringK;
-  dots = []; rings = []; beams = []; texts = []; popped = 0; combo = 0; score = 0;
+// layout from a random source; daily runs pass a seeded one so every retry and every player gets the same field
+function genDots(cfg, R) {
+  const rr = (a, b) => a + R() * (b - a), out = [];
   const r = Math.max(7, Math.sqrt(W * H) * 0.013);
   for (let i = 0; i < cfg.count; i++) {
-    const a = rnd(0, Math.PI * 2), s = rnd(25, 60);
-    dots.push({ x: rnd(r, W - r), y: rnd(r + 60, H - r), vx: Math.cos(a) * s, vy: Math.sin(a) * s, r, hue: (i * 37) % 360, prism: i < cfg.prisms, rot: rnd(0, 6), alive: true });
+    const a = rr(0, Math.PI * 2), s = rr(25, 60);
+    out.push({ x: rr(r, W - r), y: rr(r + 60, H - r), vx: Math.cos(a) * s, vy: Math.sin(a) * s, r, hue: (i * 37) % 360, prism: i < cfg.prisms, rot: rr(0, 6), alive: true });
   }
+  return out;
+}
+function setup() {
+  const cfg = levelCfg(daily ? DLV : level);
+  total = cfg.count; target = cfg.target; LK = cfg.ringK;
+  rings = []; beams = []; texts = []; popped = 0; combo = 0; score = 0; maxCombo = 0; newBest = false;
+  dots = genDots(cfg, daily ? TG.rng(GAME + ':' + TG.today()) : Math.random);
   state = 'live';
 }
+// test hook: normalized daily layout for a date (does not touch game state)
+window.__dailyLayout = d => { const keep = window.__today; window.__today = d; const L = genDots(levelCfg(DLV), TG.rng(GAME + ':' + TG.today())); window.__today = keep; return L.map(o => [+(o.x / W).toFixed(4), +(o.y / H).toFixed(4), +o.vx.toFixed(2), o.prism]); };
 // ring radius scales with mean dot spacing so chains behave the same on phone and desktop
 let RK = 0.8, LK = 1;
 window.__setRK = k => { RK = k; };
 function ringR() { return RK * LK * Math.sqrt(W * H / Math.max(total, 1)); }
 function pop(d, gen) {
-  d.alive = false; popped++; combo++; quiet = 0;
-  const pts = 10 * combo; score += pts;
+  d.alive = false; quiet = 0;
+  // after game over the leftover rings still pop dots for show, but the result is frozen
+  const counted = state !== 'over'; if (counted) { popped++; combo++; }
+  const pts = 10 * combo; if (counted) { score += pts; if (combo > maxCombo) maxCombo = combo; }
   rings.push({ x: d.x, y: d.y, r: d.r, max: ringR(), t: 0, hue: d.hue, gen });
   const n = parts.length < 600 ? 14 : 6;
   for (let i = 0; i < n; i++) { const a = rnd(0, 6.283), s = rnd(60, 260); parts.push({ x: d.x, y: d.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rnd(.4, .9), t: 0, hue: d.hue }); }
@@ -167,7 +180,7 @@ function onTap(e) {
 }
 function restart() {
   track('retry'); runs++; sessionStorage.setItem('pr_runs', runs);
-  if (won) { level++; localStorage.setItem('pr_level', level); }
+  if (won && !daily) { level++; localStorage.setItem('pr_level', level); }
   setup();
 }
 cv.addEventListener('pointerdown', onTap);
@@ -180,13 +193,42 @@ document.getElementById('funYes').onclick = () => { track('fun-yes'); closeFun()
 document.getElementById('funNo').onclick = () => { track('fun-no'); closeFun(); };
 document.getElementById('funX').onclick = closeFun;
 
+// ---- daily + share UI ----
+const readyUi = document.getElementById('readyUi'), overUi = document.getElementById('overUi'), modeBtn = document.getElementById('modeBtn'), dailyBtn = document.getElementById('dailyBtn');
+for (const el of [readyUi, overUi]) el.addEventListener('pointerdown', e => e.stopPropagation());
+function startMode(d) { audio(); daily = d; dinfo = TG.daily('pr'); setup(); track(d ? 'daily-start' : 'start'); runs++; sessionStorage.setItem('pr_runs', runs); }
+dailyBtn.onclick = () => startMode(true);
+modeBtn.onclick = () => startMode(!daily);
+function shareText() {
+  const head = daily ? 'Prism Ripple Daily #' + dinfo.num : 'Prism Ripple LV ' + level;
+  const lines = [head + (won ? ' \u2705' : ''), TG.bar(popped / total, 10, '\u{1F7EA}', '\u2B1B') + ' ' + popped + '/' + total,
+    '\u{1F3AF} Goal ' + target + '  \u{1F4A5} x' + maxCombo + ' combo', '\u2B50 Score ' + score + (daily && dinfo.streak > 1 ? '  \u{1F525} ' + dinfo.streak + ' day streak' : '')];
+  return lines.join('\n');
+}
+window.__shareText = shareText;
+document.getElementById('shareBtn').onclick = async () => {
+  const how = await TG.share(shareText(), 'https://brinax.github.io/tiny-games/' + GAME + '/?src=share');
+  track('share-' + how); if (how === 'copied') TG.toast('Copied! Paste it anywhere'); else if (how === 'fail') TG.toast('Could not share');
+};
+let uiShown = '';
+function syncUi() {
+  const v = fun.style.display === 'flex' ? '' : state === 'ready' ? 'ready' : state === 'over' && performance.now() - overAt > 350 ? 'over' : '';
+  if (v === uiShown) return; uiShown = v;
+  readyUi.style.display = v === 'ready' ? 'flex' : 'none'; overUi.style.display = v === 'over' ? 'flex' : 'none';
+  readyUi.style.top = Math.round(H * 0.68) + 'px'; overUi.style.top = Math.round(H * 0.33 + 205) + 'px';
+  dinfo = daily ? dinfo : TG.daily('pr');
+  dailyBtn.textContent = 'Daily #' + dinfo.num + (dinfo.played ? '  best ' + dinfo.best : '') + (dinfo.streak ? '  \u{1F525}' + dinfo.streak : '');
+  modeBtn.textContent = daily ? 'Classic' : 'Daily #' + dinfo.num;
+}
+
 function gameOver() {
   if (state === 'over') return;
   state = 'over'; rings = rings.filter(r => !r.player); overAt = performance.now();
   won = popped >= target;
   if (SIM) return;
-  if (score > best) { best = score; localStorage.setItem('pr_best', best); }
-  overText = won ? 'LEVEL CLEAR' : 'SO CLOSE';
+  if (daily) { dinfo = TG.recordDaily('pr', score); newBest = dinfo.newBest; track('daily-gameover'); }
+  else if (score > best) { best = score; newBest = true; localStorage.setItem('pr_best', best); }
+  overText = won ? (daily ? 'DAILY CLEAR' : 'LEVEL CLEAR') : 'SO CLOSE';
   sfx(won ? 'clear' : 'fail');
   track('gameover');
   if (!funShown && runs >= 3) setTimeout(() => { if (!funShown) fun.style.display = 'flex'; }, 900);
@@ -196,7 +238,7 @@ function gameOver() {
 let last = performance.now();
 function step(now) {
   const dt = Math.min((now - last) / 1000, 0.05); last = now;
-  update(dt); draw(); requestAnimationFrame(step);
+  update(dt); draw(); syncUi(); requestAnimationFrame(step);
 }
 function update(dt) {
   for (const d of dots) {
@@ -286,7 +328,7 @@ function draw() {
   ctx.restore();
   if (flash > 0) { ctx.fillStyle = `rgba(255,255,255,${flash * 0.5})`; ctx.fillRect(0, 0, W, H); }
   ctx.textAlign = 'left'; ctx.fillStyle = '#fff'; ctx.font = '700 18px system-ui,sans-serif';
-  ctx.fillText('LV ' + level, 14, 32);
+  ctx.fillText(daily ? 'DAILY #' + dinfo.num : 'LV ' + level, 14, 32);
   ctx.textAlign = 'center';
   if (state !== 'ready') {
     ctx.fillStyle = popped >= target ? '#7fffd4' : '#fff';
@@ -312,8 +354,9 @@ function draw() {
     ctx.fillText(overText, W / 2, H * 0.33 + 55);
     ctx.font = '700 19px system-ui,sans-serif'; ctx.fillStyle = '#fff';
     ctx.fillText('Popped ' + popped + ' of ' + total + '   Score ' + score, W / 2, H * 0.33 + 95);
-    ctx.fillText('Best ' + best, W / 2, H * 0.33 + 125);
-    ctx.fillStyle = '#c9b8ff'; ctx.fillText(won ? 'Tap for level ' + (level + 1) : 'Tap to retry', W / 2, H * 0.33 + 165);
+    ctx.fillStyle = newBest ? '#ffe27a' : '#fff';
+    ctx.fillText(daily ? (newBest ? 'New best today! ' : "Today's best ") + dinfo.best + '   \u{1F525} ' + dinfo.streak : (newBest ? 'New best! ' : 'Best ') + best, W / 2, H * 0.33 + 125);
+    ctx.fillStyle = '#c9b8ff'; ctx.fillText(daily ? 'Tap to retry the daily' : won ? 'Tap for level ' + (level + 1) : 'Tap to retry', W / 2, H * 0.33 + 165);
   }
 }
 // test hook: best-of-N. Same layout, `tries` candidate taps (random dots/prisms), returns best fraction per layout
