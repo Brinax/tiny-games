@@ -35,21 +35,59 @@ const muteBtn = document.getElementById('mute');
 function setMuteIcon() { muteBtn.textContent = muted ? '🔇' : '🔊'; }
 setMuteIcon();
 muteBtn.addEventListener('pointerdown', e => { e.stopPropagation(); muted = !muted; localStorage.setItem('pr_muted', muted ? '1' : '0'); setMuteIcon(); });
+let master = null;
 function audio() {
-  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); master = actx.createGain(); master.gain.value = 0.8; master.connect(actx.destination); } catch (e) { actx = null; } }
   if (actx && actx.state === 'suspended') actx.resume();
   return actx;
 }
-let lastBlip = 0;
-function blip(freq, dur, type, vol) {
-  if (SIM || muted || !actx) return;
-  const t = actx.currentTime;
-  if (t - lastBlip < 0.012) return; lastBlip = t;
-  const o = actx.createOscillator(), g = actx.createGain();
-  o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t);
-  o.frequency.exponentialRampToValueAtTime(freq * 1.5, t + dur);
-  g.gain.setValueAtTime(vol || 0.12, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+// Tiny WebAudio synth. Every recipe takes (ctx, out, when, param) so the same code can play live
+// or be rendered offline (the clip recorder renders window.__sfxLog through window.__SFX).
+const noiseBufs = new WeakMap();
+function noiseBuf(c) {
+  let b = noiseBufs.get(c); if (b) return b;
+  b = c.createBuffer(1, c.sampleRate * 0.6, c.sampleRate); const d = b.getChannelData(0);
+  let s = 12345; for (let i = 0; i < d.length; i++) { s = (s * 1103515245 + 12345) >>> 0; d[i] = s / 2147483648 - 1; }
+  noiseBufs.set(c, b); return b;
+}
+function tone(c, out, t, f0, f1, dur, type, vol, atk) {
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + (atk || 0.004)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(out); o.start(t); o.stop(t + dur + 0.03);
+}
+function noise(c, out, t, dur, ftype, f0, f1, q, vol) {
+  const s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+  s.buffer = noiseBuf(c); f.type = ftype; f.Q.value = q; f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f).connect(g).connect(out); s.start(t); s.stop(t + dur + 0.03);
+}
+const PENTA = [0, 2, 4, 7, 9];
+const note = i => 392 * Math.pow(2, (Math.floor(i / 5) * 12 + PENTA[i % 5]) / 12); // G4 pentatonic, rising
+const SFX = {
+  tap(c, o, t) { tone(c, o, t, 180, 70, 0.22, 'sine', 0.35); noise(c, o, t, 0.08, 'lowpass', 1200, 300, 1, 0.12); },
+  pop(c, o, t, n) { // bubbly pop that climbs a pentatonic scale with the combo
+    const f = note(Math.min(n, 22));
+    tone(c, o, t, f * 1.6, f, 0.05, 'sine', 0.16, 0.002);
+    tone(c, o, t + 0.01, f, f, 0.22, 'triangle', 0.10); tone(c, o, t + 0.01, f * 2, f * 2, 0.14, 'sine', 0.04);
+  },
+  beam(c, o, t) { // laser zap: falling saw + bright noise sweep
+    tone(c, o, t, 2200, 160, 0.32, 'sawtooth', 0.07, 0.002); tone(c, o, t, 1100, 90, 0.28, 'square', 0.04, 0.002);
+    noise(c, o, t, 0.35, 'bandpass', 6000, 500, 3, 0.18);
+  },
+  clear(c, o, t) { [0, 2, 4, 5, 7].forEach((k, i) => { const f = note(5 + k); tone(c, o, t + i * 0.085, f, f, 0.5, 'triangle', 0.13); tone(c, o, t + i * 0.085, f * 2, f * 2, 0.3, 'sine', 0.04); }); },
+  fail(c, o, t) { tone(c, o, t, 330, 140, 0.55, 'sine', 0.2); tone(c, o, t + 0.12, 247, 100, 0.5, 'triangle', 0.1); },
+};
+window.__SFX = SFX; window.__sfxLog = [];
+let lastPop = 0;
+function sfx(name, p) {
+  if (SIM) return;
+  const now = performance.now();
+  if (name === 'pop') { if (now - lastPop < 30) return; lastPop = now; }
+  window.__sfxLog.push({ n: name, p: p || 0, t: now });
+  if (window.__sfxLog.length > 400) window.__sfxLog.shift();
+  if (muted || !actx || actx.state !== 'running') return;
+  try { SFX[name](actx, master, actx.currentTime + 0.005, p || 0); } catch (e) { /* audio is optional */ }
 }
 
 // ---- state ----
@@ -62,6 +100,7 @@ let popped = 0, combo = 0, score = 0, target = 0, total = 0, shake = 0, flash = 
 let runs = +(sessionStorage.getItem('pr_runs') || 0), funShown = sessionStorage.getItem('pr_fun') === '1';
 let quiet = 0, overAt = 0, won = false, overText = '';
 window.__firstDot = () => { const d = dots.find(d => d.alive && !d.prism); return { x: d.x, y: d.y }; };
+window.__prism = () => { const d = dots.find(d => d.alive && d.prism); return d ? { x: d.x, y: d.y } : null; };
 window.__game = { get state() { return state; }, get popped() { return popped; }, get level() { return level; } };
 
 // Levels 1-7 are a gentle ramp. From level 8 on, rings shrink and prisms get rarer, so a random
@@ -99,13 +138,13 @@ function pop(d, gen) {
   for (let i = 0; i < n; i++) { const a = rnd(0, 6.283), s = rnd(60, 260); parts.push({ x: d.x, y: d.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rnd(.4, .9), t: 0, hue: d.hue }); }
   if (combo % 5 === 0 || combo > 10) texts.push({ x: d.x, y: d.y, s: '+' + pts, t: 0, hue: d.hue });
   shake = Math.min(shake + 2.5, 16);
-  blip(220 * Math.pow(2, Math.min(combo, 36) / 12), 0.12, 'triangle', 0.09);
+  sfx('pop', combo);
   if (d.prism) firePrism(d);
 }
 // TWIST: prism shards fire 3 light beams across the screen that pop every dot they cross
 function firePrism(d) {
   flash = 0.35; shake = Math.min(shake + 8, 20);
-  blip(880, 0.35, 'sawtooth', 0.06);
+  sfx('beam');
   for (let k = 0; k < 3; k++) {
     const a = d.rot + k * Math.PI * 2 / 3;
     beams.push({ x: d.x, y: d.y, ax: Math.cos(a), ay: Math.sin(a), len: 0, L: Math.hypot(W, H), t: 0, hue: (d.hue + k * 120) % 360 });
@@ -121,7 +160,7 @@ function onTap(e) {
   if (state === 'ready') { setup(); track('start'); runs++; sessionStorage.setItem('pr_runs', runs); return; }
   if (state === 'live') {
     rings.push({ x, y, r: 4, max: ringR() * 1.8, t: 0, hue: 0, gen: 0, player: true });
-    state = 'chain'; quiet = 0; blip(160, 0.25, 'sine', 0.15); return;
+    state = 'chain'; quiet = 0; sfx('tap'); return;
   }
   if (state === 'chain' && popped >= target) { gameOver(); return; }
   if (state === 'over' && performance.now() - overAt > 250) restart();
@@ -148,7 +187,7 @@ function gameOver() {
   if (SIM) return;
   if (score > best) { best = score; localStorage.setItem('pr_best', best); }
   overText = won ? 'LEVEL CLEAR' : 'SO CLOSE';
-  blip(won ? 660 : 140, 0.5, won ? 'triangle' : 'sine', 0.15);
+  sfx(won ? 'clear' : 'fail');
   track('gameover');
   if (!funShown && runs >= 3) setTimeout(() => { if (!funShown) fun.style.display = 'flex'; }, 900);
 }
