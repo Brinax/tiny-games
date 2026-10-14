@@ -33,19 +33,57 @@ const muteBtn = document.getElementById('mute');
 const setMuteIcon = () => { muteBtn.textContent = muted ? '🔇' : '🔊'; };
 setMuteIcon();
 muteBtn.addEventListener('pointerdown', e => { e.stopPropagation(); muted = !muted; localStorage.setItem('wc_muted', muted ? '1' : '0'); setMuteIcon(); });
+let master = null;
 function audio() {
-  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); master = actx.createGain(); master.gain.value = 0.8; master.connect(actx.destination); } catch (e) { actx = null; } }
   if (actx && actx.state === 'suspended') actx.resume();
 }
-let lastBlip = 0;
-function blip(f, dur, type, vol, slide) {
-  if (muted || !actx) return;
-  const t = actx.currentTime; if (t - lastBlip < 0.015) return; lastBlip = t;
-  const o = actx.createOscillator(), g = actx.createGain();
-  o.type = type || 'square'; o.frequency.setValueAtTime(f, t);
-  o.frequency.exponentialRampToValueAtTime(Math.max(30, f * (slide || 1.6)), t + dur);
-  g.gain.setValueAtTime(vol || 0.08, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+// Tiny WebAudio synth. Every recipe takes (ctx, out, when, param) so the same code can play live
+// or be rendered offline (the clip recorder renders window.__sfxLog through window.__SFX).
+const noiseBufs = new WeakMap();
+function noiseBuf(c) {
+  let b = noiseBufs.get(c); if (b) return b;
+  b = c.createBuffer(1, c.sampleRate * 0.6, c.sampleRate); const d = b.getChannelData(0);
+  let s = 12345; for (let i = 0; i < d.length; i++) { s = (s * 1103515245 + 12345) >>> 0; d[i] = s / 2147483648 - 1; }
+  noiseBufs.set(c, b); return b;
+}
+function tone(c, out, t, f0, f1, dur, type, vol, atk) {
+  const o = c.createOscillator(), g = c.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + (atk || 0.004)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(out); o.start(t); o.stop(t + dur + 0.03);
+}
+function noise(c, out, t, dur, ftype, f0, f1, q, vol) {
+  const s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+  s.buffer = noiseBuf(c); f.type = ftype; f.Q.value = q; f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f).connect(g).connect(out); s.start(t); s.stop(t + dur + 0.03);
+}
+const PENTA = [0, 2, 4, 7, 9];
+const note = i => 392 * Math.pow(2, (Math.floor(i / 5) * 12 + PENTA[i % 5]) / 12); // G4 pentatonic, rising
+const SFX = {
+  start(c, o, t) { tone(c, o, t, 300, 600, 0.15, 'triangle', 0.12); },
+  slice(c, o, t, n) { // crisp blade hit, rises with the slice chain
+    const f = note(Math.min(n, 15) + 3);
+    noise(c, o, t, 0.07, 'highpass', 5000, 2500, 0.7, 0.16);
+    tone(c, o, t, f * 2, f, 0.07, 'square', 0.05, 0.002); tone(c, o, t + 0.005, f, f, 0.16, 'triangle', 0.09);
+  },
+  whoosh(c, o, t) { noise(c, o, t, 0.3, 'bandpass', 500, 2600, 2.5, 0.25); tone(c, o, t, 200, 420, 0.25, 'sine', 0.03, 0.08); },
+  thud(c, o, t) {
+    tone(c, o, t, 140, 38, 0.6, 'sine', 0.55, 0.003); tone(c, o, t, 90, 30, 0.5, 'triangle', 0.25, 0.003);
+    noise(c, o, t, 0.5, 'lowpass', 1800, 120, 0.8, 0.35); tone(c, o, t + 0.05, 420, 60, 0.7, 'sawtooth', 0.05);
+  },
+  chime(c, o, t) { [0, 2, 4].forEach((k, i) => { const f = note(10 + k); tone(c, o, t + i * 0.07, f, f, 0.7, 'triangle', 0.12); tone(c, o, t + i * 0.07, f * 3, f * 3, 0.35, 'sine', 0.03); }); },
+};
+window.__SFX = SFX; window.__sfxLog = [];
+const sfxGap = { slice: 35, whoosh: 160 }, sfxLast = {};
+function sfx(name, p) {
+  const now = performance.now();
+  if (sfxGap[name]) { if (now - (sfxLast[name] || -1e9) < sfxGap[name]) return; sfxLast[name] = now; }
+  window.__sfxLog.push({ n: name, p: p || 0, t: now });
+  if (window.__sfxLog.length > 400) window.__sfxLog.shift();
+  if (muted || !actx || actx.state !== 'running') return;
+  try { SFX[name](actx, master, actx.currentTime + 0.005, p || 0); } catch (e) { /* audio is optional */ }
 }
 
 // ---- state ----
@@ -64,7 +102,7 @@ const HUES = [190, 90, 40, 170, 140, 260]; // kept away from bullet pink (~345)
 function reset() {
   P.x = W / 2; P.y = H * 0.7; P.r = 7 * U;
   wake = []; bullets = []; texts = []; t = 0; cuts = 0; score = 0; spawnT = 1.4; slow = 1; tier = 0; chainCut = 0;
-  runId++; state = 'play';
+  runId++; state = 'play'; sfx('start');
 }
 function hue() { return HUES[tier % HUES.length]; }
 
@@ -141,7 +179,7 @@ document.getElementById('funX').onclick = closeFun;
 function die() {
   state = 'dying'; deathT = 0; slow = 0.15; shake = 22; drag = null;
   burst(P.x, P.y, hue(), 80, 420);
-  blip(300, 0.7, 'sawtooth', 0.14, 0.15);
+  sfx('thud');
 }
 function gameOver() {
   state = 'over'; overAt = performance.now();
@@ -171,14 +209,16 @@ function update(rdt) {
     if (!lw || Math.hypot(lw.x - P.x, lw.y - P.y) > 3) wake.push({ x: P.x, y: P.y, t });
     spawnT -= dt; if (spawnT <= 0) spawn();
     const nt = TIERS.filter(x => t >= x).length - 1;
-    if (nt > tier) { tier = nt; texts.push({ x: W / 2, y: H * 0.3, s: TIERS[tier] + 's!', t: 0, big: true }); blip(520, 0.4, 'triangle', 0.12, 2); shake = 8; }
+    if (nt > tier) { tier = nt; texts.push({ x: W / 2, y: H * 0.3, s: TIERS[tier] + 's!', t: 0, big: true }); sfx('chime'); shake = 8; }
     chainT -= dt; if (chainT <= 0) chainCut = 0;
   }
   wake = wake.filter(w => t - w.t < WAKE_LIFE);
   for (const b of bullets) {
     b.x += b.vx * dt; b.y += b.vy * dt;
     if (state !== 'play') continue;
-    if (Math.hypot(b.x - P.x, b.y - P.y) < b.r + P.r * 0.7) { die(); break; }
+    const pd = Math.hypot(b.x - P.x, b.y - P.y);
+    if (pd < b.r + P.r * 0.7) { die(); break; }
+    if (!b.nm && pd < b.r + P.r * 0.7 + 12 * U) { b.nm = true; sfx('whoosh'); } // near miss
     // TWIST: your fading wake slices bullets. Skip the newest bit right behind the ship.
     for (let i = 1; i < wake.length; i++) {
       const a = wake[i - 1], c = wake[i];
@@ -189,7 +229,7 @@ function update(rdt) {
       cuts++; chainCut++; chainT = 0.5;
       burst(b.x, b.y, hue(), 14);
       shake = Math.min(shake + 2, 12);
-      blip(600 + Math.min(chainCut, 20) * 60, 0.08, 'square', 0.06);
+      sfx('slice', chainCut);
       if (chainCut >= 3) texts.push({ x: b.x, y: b.y, s: 'SLICE x' + chainCut, t: 0 });
     }
   }
