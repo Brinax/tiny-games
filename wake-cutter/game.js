@@ -95,13 +95,19 @@ let P = { x: 0, y: 0, r: 7 };
 let wake = [], bullets = [], parts = [], texts = [];
 let runId = 0, t = 0, cuts = 0, score = 0, spawnT = 0, shake = 0, slow = 1, deathT = 0, overAt = 0, tier = 0, chainCut = 0, chainT = 0;
 let runs = +(sessionStorage.getItem('wc_runs') || 0), funShown = sessionStorage.getItem('wc_fun') === '1';
-window.__game = { get state() { return state; }, get time() { return t; }, get cuts() { return cuts; }, get player() { return { x: P.x, y: P.y }; }, get bullets() { return bullets.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, r: b.r })); }, get pr() { return P.r; } };
+window.__game = { get daily() { return daily; }, get score() { return score; }, get dinfo() { return dinfo; }, get state() { return state; }, get time() { return t; }, get cuts() { return cuts; }, get player() { return { x: P.x, y: P.y }; }, get bullets() { return bullets.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, r: b.r })); }, get pr() { return P.r; } };
 const TIERS = [0, 10, 20, 30, 45, 60];
+// ---- daily challenge: bullet patterns come from a seeded RNG per UTC date ----
+let daily = false, dinfo = TG.daily('wc'), newBest = false, gr = Math.random, gp = Math.random; // gr: positions, gp: which pattern (independent of where the player is)
+const grnd = (a, b) => a + gr() * (b - a); // gameplay randomness (patterns); visuals keep rnd
+window.__spawnLog = [];
+window.__dailyPeek = (d, n) => { const keep = window.__today; window.__today = d; const g = TG.rng(GAME + ':' + TG.today()); window.__today = keep; return Array.from({ length: n || 8 }, () => +g().toFixed(6)); };
 const HUES = [190, 90, 40, 170, 140, 260]; // kept away from bullet pink (~345)
 
 function reset() {
   P.x = W / 2; P.y = H * 0.7; P.r = 7 * U;
   wake = []; bullets = []; texts = []; t = 0; cuts = 0; score = 0; spawnT = 1.4; slow = 1; tier = 0; chainCut = 0;
+  newBest = false; gr = daily ? TG.rng(GAME + ':' + TG.today()) : Math.random; gp = daily ? TG.rng(GAME + ':p:' + TG.today()) : Math.random; window.__spawnLog = [];
   runId++; state = 'play'; sfx('start');
 }
 function hue() { return HUES[tier % HUES.length]; }
@@ -116,26 +122,26 @@ function edgePoint() {
   return edgePoint1();
 }
 function edgePoint1() {
-  const e = Math.floor(rnd(0, 4));
-  if (e === 0) return { x: rnd(0, W), y: -10 };
-  if (e === 1) return { x: W + 10, y: rnd(0, H) };
-  if (e === 2) return { x: rnd(0, W), y: H + 10 };
-  return { x: -10, y: rnd(0, H) };
+  const e = Math.floor(grnd(0, 4));
+  if (e === 0) return { x: grnd(0, W), y: -10 };
+  if (e === 1) return { x: W + 10, y: grnd(0, H) };
+  if (e === 2) return { x: grnd(0, W), y: H + 10 };
+  return { x: -10, y: grnd(0, H) };
 }
 const patterns = [
   () => { const p = edgePoint(), a = Math.atan2(P.y - p.y, P.x - p.x); for (let i = 0; i < 5; i++) later(() => shoot(p.x, p.y, a, spd()), i * 90); },
   () => { const p = edgePoint(), a = Math.atan2(P.y - p.y, P.x - p.x); for (let i = -2; i <= 2; i++) shoot(p.x, p.y, a + i * 0.22, spd() * 0.9); },
-  () => { let x, y, k = 0; do { x = rnd(W * .2, W * .8); y = rnd(H * .15, H * .4); } while (!far(x, y) && ++k < 8); const n = 12 + Math.floor(t / 8); for (let i = 0; i < n; i++) shoot(x, y, i / n * TAU, spd() * 0.7); burst(x, y, 0, 16); },
-  () => { const gap = rnd(0.15, 0.85) * W, n = Math.ceil(W / (26 * U)); for (let i = 0; i < n; i++) { const x = i * 26 * U + 10; if (Math.abs(x - gap) > 50 * U) shoot(x, -10, Math.PI / 2, spd() * 0.75); } },
-  () => { const cx = W / 2, cy = far(W / 2, H / 2) ? H / 2 : (P.y > H / 2 ? H * 0.25 : H * 0.75), a0 = rnd(0, TAU); for (let i = 0; i < 16; i++) later(() => shoot(cx, cy, a0 + i * 0.5, spd() * 0.8), i * 60); },
+  () => { let x, y, k = 0; do { x = grnd(W * .2, W * .8); y = grnd(H * .15, H * .4); } while (!far(x, y) && ++k < 8); const n = 12 + Math.floor(t / 8); for (let i = 0; i < n; i++) shoot(x, y, i / n * TAU, spd() * 0.7); burst(x, y, 0, 16); },
+  () => { const gap = grnd(0.15, 0.85) * W, n = Math.ceil(W / (26 * U)); for (let i = 0; i < n; i++) { const x = i * 26 * U + 10; if (Math.abs(x - gap) > 50 * U) shoot(x, -10, Math.PI / 2, spd() * 0.75); } },
+  () => { const cx = W / 2, cy = far(W / 2, H / 2) ? H / 2 : (P.y > H / 2 ? H * 0.25 : H * 0.75), a0 = grnd(0, TAU); for (let i = 0; i < 16; i++) later(() => shoot(cx, cy, a0 + i * 0.5, spd() * 0.8), i * 60); },
 ];
 function spawn() {
   const unlocked = Math.min(patterns.length, 1 + Math.floor(t / 5));
-  patterns[Math.floor(rnd(0, unlocked))]();
+  const pi = Math.floor(gp() * unlocked); window.__spawnLog.push(pi); patterns[pi]();
   // past 35s keep ramping gently: the spawn floor keeps sliding down and a second pattern
   // sometimes stacks on top, so runs end within a couple of minutes even for strong players
   const late = Math.max(0, t - 35);
-  if (late > 0 && Math.random() < Math.min(0.45, late * 0.012)) later(() => patterns[Math.floor(rnd(0, patterns.length))](), 250);
+  if (late > 0 && gp() < Math.min(0.45, late * 0.012)) { const pj = Math.floor(gp() * patterns.length); later(() => patterns[pj](), 250); }
   spawnT = Math.max(Math.max(0.26, 0.45 - late * 0.004), 1.5 - t * 0.03);
 }
 
@@ -169,6 +175,34 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 function restart() { track('retry'); runs++; sessionStorage.setItem('wc_runs', runs); reset(); }
 
+// ---- daily + share UI ----
+const readyUi = document.getElementById('readyUi'), overUi = document.getElementById('overUi'), modeBtn = document.getElementById('modeBtn'), dailyBtn = document.getElementById('dailyBtn');
+for (const el of [readyUi, overUi]) el.addEventListener('pointerdown', e => e.stopPropagation());
+function startMode(d) { audio(); daily = d; dinfo = TG.daily('wc'); reset(); track(d ? 'daily-start' : 'start'); runs++; sessionStorage.setItem('wc_runs', runs); }
+dailyBtn.onclick = () => startMode(true);
+modeBtn.onclick = () => startMode(!daily);
+function shareText() {
+  const reached = TIERS.slice(1).map(x => t >= x ? (x >= 30 ? '\u{1F7E9}' : '\u{1F7E8}') : '\u2B1B').join('');
+  const lines = [(daily ? 'Wake Cutter Daily #' + dinfo.num : 'Wake Cutter') + (t >= 30 ? ' \u2705' : ''), reached + ' ' + t.toFixed(1) + 's',
+    '\u2702\uFE0F ' + cuts + ' cuts  \u2B50 Score ' + score + (daily && dinfo.streak > 1 ? '  \u{1F525} ' + dinfo.streak + ' day streak' : '')];
+  return lines.join('\n');
+}
+window.__shareText = shareText;
+document.getElementById('shareBtn').onclick = async () => {
+  const how = await TG.share(shareText(), 'https://brinax.github.io/tiny-games/' + GAME + '/?src=share');
+  track('share-' + how); if (how === 'copied') TG.toast('Copied! Paste it anywhere'); else if (how === 'fail') TG.toast('Could not share');
+};
+let uiShown = '';
+function syncUi() {
+  const v = fun.style.display === 'flex' ? '' : state === 'ready' ? 'ready' : state === 'over' && performance.now() - overAt > 400 ? 'over' : '';
+  if (v === uiShown) return; uiShown = v;
+  readyUi.style.display = v === 'ready' ? 'flex' : 'none'; overUi.style.display = v === 'over' ? 'flex' : 'none';
+  readyUi.style.top = Math.round(H * 0.58) + 'px'; overUi.style.top = Math.round(H * 0.33 + 215) + 'px';
+  dinfo = daily ? dinfo : TG.daily('wc');
+  dailyBtn.textContent = 'Daily #' + dinfo.num + (dinfo.played ? '  best ' + dinfo.best : '') + (dinfo.streak ? '  \u{1F525}' + dinfo.streak : '');
+  modeBtn.textContent = daily ? 'Classic' : 'Daily #' + dinfo.num;
+}
+
 // ---- fun prompt ----
 const fun = document.getElementById('fun');
 function closeFun() { fun.style.display = 'none'; funShown = true; sessionStorage.setItem('wc_fun', '1'); }
@@ -184,7 +218,8 @@ function die() {
 function gameOver() {
   state = 'over'; overAt = performance.now();
   score = Math.floor(t * 10) + cuts * 5;
-  if (score > best) { best = score; localStorage.setItem('wc_best', best); }
+  if (daily) { dinfo = TG.recordDaily('wc', score); newBest = dinfo.newBest; track('daily-gameover'); }
+  else if (score > best) { best = score; newBest = true; localStorage.setItem('wc_best', best); }
   track('gameover');
   if (!funShown && runs >= 3) setTimeout(() => { if (!funShown) fun.style.display = 'flex'; }, 900);
 }
@@ -279,6 +314,7 @@ function draw() {
   // HUD
   ctx.textAlign = 'left'; ctx.fillStyle = '#fff'; ctx.font = '800 22px system-ui,sans-serif';
   if (state !== 'ready') ctx.fillText(t.toFixed(1) + 's', 14, 34);
+  if (daily && state !== 'ready') { ctx.font = '700 13px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillText('DAILY #' + dinfo.num, 14, 54); }
   ctx.textAlign = 'center'; ctx.font = '700 16px system-ui,sans-serif'; ctx.fillStyle = `hsl(${h},100%,70%)`;
   if (state !== 'ready') ctx.fillText('CUTS ' + cuts, W / 2, 32);
   if (state === 'ready') {
@@ -293,12 +329,13 @@ function draw() {
     ctx.fillText(t.toFixed(1) + 's', W / 2, H * 0.33 + 60);
     ctx.font = '700 19px system-ui,sans-serif'; ctx.fillStyle = '#fff';
     ctx.fillText(cuts + ' cuts   Score ' + score, W / 2, H * 0.33 + 100);
-    ctx.fillText('Best ' + best, W / 2, H * 0.33 + 130);
-    ctx.fillStyle = `hsl(${h},100%,75%)`; ctx.fillText(t >= 30 ? 'You did it. Again?' : 'Tap to retry', W / 2, H * 0.33 + 172);
+    ctx.fillStyle = newBest ? '#ffe27a' : '#fff';
+    ctx.fillText(daily ? (newBest ? 'New best today! ' : "Today's best ") + dinfo.best + '   \u{1F525} ' + dinfo.streak : (newBest ? 'New best! ' : 'Best ') + best, W / 2, H * 0.33 + 130);
+    ctx.fillStyle = `hsl(${h},100%,75%)`; ctx.fillText(daily ? 'Tap to retry the daily' : t >= 30 ? 'You did it. Again?' : 'Tap to retry', W / 2, H * 0.33 + 172);
   }
 }
 
 let last = performance.now();
-function step(now) { const dt = Math.min((now - last) / 1000, 0.05); last = now; update(dt); draw(); requestAnimationFrame(step); }
+function step(now) { const dt = Math.min((now - last) / 1000, 0.05); last = now; update(dt); draw(); syncUi(); requestAnimationFrame(step); }
 requestAnimationFrame(step);
 })();
