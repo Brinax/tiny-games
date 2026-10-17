@@ -115,12 +115,25 @@ function reset() {
 }
 // Crystals drift in from off screen toward the core. Later on they come in clusters at the same distance,
 // which is what makes one perfectly timed blast clear five at once.
+// Difficulty ramp. EASY seconds of gentle warm-up (single, slow crystals, rare pairs), then a steady ramp that
+// reaches the old 60s pressure around 120s and keeps climbing to a hard cap, so late runs stay intense.
+const EASY = 35;
+function diff(t) {
+  const e = Math.min(t, EASY), l = Math.max(0, t - EASY);
+  return {
+    v: Math.min(450, 50 + 0.8 * e + 2 * l),                                   // approach speed, px/s at U=1
+    p: t < 8 ? 0 : Math.min(0.7, 0.15 + 0.004 * t + 0.006 * l),              // chance a spawn is a cluster
+    m: Math.min(4, 1 + Math.max(0, t - 20) / 25),                             // cluster size = 2 + floor(rnd(0, m))
+    gap: Math.max(0.4, 1.6 - 0.008 * e - 0.012 * l),                          // base seconds between spawns
+  };
+}
+window.__diff = diff;
 function spawn() {
-  const d0 = maxR() + 30, v = (50 + t * 3 + Math.max(0, t - 30) * 2.5) * U;
-  const n = t < 6 ? 1 : Math.random() < Math.min(0.75, 0.2 + t * 0.012) ? 2 + Math.floor(rnd(0, Math.min(4, 1 + t / 15))) : 1;
+  const D = diff(t), d0 = maxR() + 30, v = D.v * U;
+  const n = Math.random() < D.p ? 2 + Math.floor(rnd(0, D.m)) : 1;
   const a0 = rnd(0, TAU), spread = rnd(0.35, 0.7);
   for (let i = 0; i < n; i++) crystals.push({ a: a0 + (i - (n - 1) / 2) * spread, d: d0 + rnd(-6, 6) * U, v, r: rnd(11, 15) * U, rot: rnd(0, TAU), spin: rnd(-2, 2), sides: 5 + (i % 3) });
-  spawnT = Math.max(0.32, 1.5 - t * 0.03) * (0.7 + n * 0.3);
+  spawnT = D.gap * (0.7 + n * 0.3);
 }
 function shatter(c, k) {
   c.dead = true; shatters++; chain++; chainT = 0.6; bestChain = Math.max(bestChain, chain);
