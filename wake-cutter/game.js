@@ -315,6 +315,7 @@ function draw() {
   ctx.textAlign = 'left'; ctx.fillStyle = '#fff'; ctx.font = '800 22px system-ui,sans-serif';
   if (state !== 'ready') ctx.fillText(t.toFixed(1) + 's', 14, 34);
   if (daily && state !== 'ready') { ctx.font = '700 13px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillText('DAILY #' + dinfo.num, 14, 54); }
+  if (daily && state === 'play' && t < 6) { ctx.font = '600 12px system-ui,sans-serif'; ctx.fillStyle = `rgba(255,255,255,${0.65 * Math.min(1, (6 - t) / 1.5)})`; ctx.fillText('Same pattern for everyone today', 14, 71); }
   ctx.textAlign = 'center'; ctx.font = '700 16px system-ui,sans-serif'; ctx.fillStyle = `hsl(${h},100%,70%)`;
   if (state !== 'ready') ctx.fillText('CUTS ' + cuts, W / 2, 32);
   if (state === 'ready') {
