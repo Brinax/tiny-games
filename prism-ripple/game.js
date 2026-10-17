@@ -329,6 +329,7 @@ function draw() {
   if (flash > 0) { ctx.fillStyle = `rgba(255,255,255,${flash * 0.5})`; ctx.fillRect(0, 0, W, H); }
   ctx.textAlign = 'left'; ctx.fillStyle = '#fff'; ctx.font = '700 18px system-ui,sans-serif';
   ctx.fillText(daily ? 'DAILY #' + dinfo.num : 'LV ' + level, 14, 32);
+  if (daily && state === 'live') { ctx.font = '600 12px system-ui,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.65)'; ctx.fillText('Same level for everyone today', 14, 50); }
   ctx.textAlign = 'center';
   if (state !== 'ready') {
     ctx.fillStyle = popped >= target ? '#7fffd4' : '#fff';
